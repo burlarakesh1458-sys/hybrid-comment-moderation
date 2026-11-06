@@ -7,7 +7,8 @@
 
 Two evaluation sets:
   sample  the fixed N-comment LLM sample (all four scenarios, head-to-head)
-  test    the full 5,000-comment test split (ml_only, rules_ml, hybrid)
+  test    the 5,000-comment test split, or its first --test-n comments in the fixed permutation
+          (a superset of the sample) when the LLM budget cannot cover the full split
 
 LLM verdicts come from the on-disk cache; with --allow-llm, missing band verdicts are fetched
 (resumable). Outputs results/metrics.json, results/results_table.md, results/predictions_*.csv.
@@ -96,6 +97,9 @@ def main() -> None:
     ap.add_argument("--allow-llm", action="store_true", help="fetch missing band verdicts")
     ap.add_argument("--model", default=None, help="override classifier path")
     ap.add_argument("--tag", default="")
+    ap.add_argument("--test-n", type=int, default=None,
+                    help="evaluate the 'test' set on the first N comments of the fixed test "
+                         "permutation (nests the LLM sample); default = all 5,000")
     args = ap.parse_args()
     cfg = load_config()
     rules = RuleEngine.from_file(cfg.rules, cfg.path(cfg.rules.lexicon_path))
@@ -104,7 +108,7 @@ def main() -> None:
     reviewer = LLMReviewer(cfg.llm, transport=transport, cache_path=cfg.path(cfg.llm.cache_path),
                            max_rate_wait_s=3600 if args.allow_llm else 0)
 
-    test = load_split("test")
+    test = llm_sample(args.test_n) if args.test_n else load_split("test")
     sample = llm_sample(cfg.experiment.llm_sample_size)
     missing = [t for t in sample.comment_text if not reviewer.cache.get(cache_key(cfg.llm.model, t))]
     if missing:

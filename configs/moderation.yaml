@@ -21,18 +21,19 @@ classifier:
 llm:
   enabled: true
   provider: groq                           # groq | gemini (both OpenAI-compatible endpoints)
-  model: openai/gpt-oss-120b
+  model: openai/gpt-oss-safeguard-20b       # policy-following safety model; see README for why
   base_url: https://api.groq.com/openai/v1
   api_key_env: GROQ_API_KEY
-  batch_size: 16                           # comments per request (amortises the system prompt)
+  batch_size: 8                            # comments per request (fits the 2K tokens/min free-tier cap)
   max_retries: 3                           # schema-validation / transport retries per batch
   timeout_s: 60
   reasoning_effort: low
   cache_path: results/llm_cache.jsonl
-  # Published Groq on-demand price for openai/gpt-oss-120b (USD per 1M tokens), read 2026-11-06:
-  # https://console.groq.com/docs/model/openai/gpt-oss-120b  (cached input $0.075 not used)
-  price_input_per_m: 0.15
-  price_output_per_m: 0.60
+  # Published Groq on-demand price for openai/gpt-oss-safeguard-20b (USD per 1M tokens), read
+  # 2026-11-06: https://console.groq.com/docs/model/openai/gpt-oss-safeguard-20b
+  # (cached-input discount $0.037 ignored -> conservative)
+  price_input_per_m: 0.075
+  price_output_per_m: 0.30
 
 human_review:
   queue_path: results/review_queue.sqlite
