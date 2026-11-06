@@ -78,12 +78,12 @@ def main() -> None:
             pareto.append(r)
             best = r["f1"]
     chosen = simulate(c.band_low, c.band_high)
-    ml_only = simulate(c.threshold, c.threshold)
+    rules_ml = simulate(c.threshold, c.threshold)
     llm_all_flag = llm_v
     llm_all = {"f1": binary_metrics(y, llm_all_flag)["f1"],
                "cost_per_10k": round(float(tok_cost.sum() / len(y) * 10_000), 4)}
 
-    out = {"n": len(y), "chosen": chosen, "ml_only": ml_only, "llm_all": llm_all,
+    out = {"n": len(y), "chosen": chosen, "rules_ml_no_llm": rules_ml, "llm_all": llm_all,
            "budget_curve": budget, "pareto": pareto, "grid_size": len(grid)}
     cfg.path("results/band_sweep.json").write_text(json.dumps(out, indent=2) + "\n")
 
@@ -92,14 +92,15 @@ def main() -> None:
     xs = [b["routed_share"] * 100 for b in budget]
     ax.plot(xs, [b["f1"] for b in budget], "o-", color="#2563eb", label="rules + ML + LLM band")
     ax.axhline(llm_all["f1"], color="#dc2626", ls="--", label=f"LLM for everything (F1 {llm_all['f1']:.3f})")
-    ax.axhline(ml_only["f1"], color="#6b7280", ls=":", label=f"ML only (F1 {ml_only['f1']:.3f})")
+    ax.axhline(rules_ml["f1"], color="#6b7280", ls=":",
+               label=f"rules + ML, no LLM (F1 {rules_ml['f1']:.3f})")
     ax.scatter([chosen["routed_share"] * 100], [chosen["f1"]], s=140, facecolors="none",
                edgecolors="#16a34a", linewidths=2, zorder=5, label="chosen band (tuned on calib)")
     ax.set_xlabel("% of comments sent to the LLM")
     ax.set_ylabel("F1 (toxic)")
     ax.set_title(f"LLM budget vs F1 (n={len(y)} sample)")
     ax.grid(alpha=0.3)
-    ax.legend(fontsize=8, loc="lower right")
+    ax.legend(fontsize=8, loc="upper right")
 
     ax = axes[1]
     ax.scatter([g["cost_per_10k"] for g in grid], [g["f1"] for g in grid], s=10, color="#93c5fd",
@@ -114,12 +115,12 @@ def main() -> None:
     ax.set_ylabel("F1 (toxic)")
     ax.set_title("Cost vs F1 for every confidence band")
     ax.grid(alpha=0.3)
-    ax.legend(fontsize=8, loc="lower right")
+    ax.legend(fontsize=8, loc="upper right")
     fig.tight_layout()
     path = cfg.path("results/charts/band_sweep.png")
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=130)
-    print(json.dumps({"chosen": chosen, "ml_only": ml_only, "llm_all": llm_all,
+    print(json.dumps({"chosen": chosen, "rules_ml_no_llm": rules_ml, "llm_all": llm_all,
                       "best_on_grid": max(grid, key=lambda r: r["f1"])}, indent=2))
 
 

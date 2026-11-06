@@ -1,0 +1,13 @@
+{
+  "model": "openai/gpt-oss-safeguard-20b",
+  "n": 500,
+  "batch_size": 8,
+  "calls_this_run": 67,
+  "cache_hits_this_run": 96,
+  "retries": 1,
+  "rate_limited": 117,
+  "failures": 0,
+  "prompt_tokens_this_run": 62216,
+  "completion_tokens_this_run": 35445,
+  "wall_s": 2841.8
+}
