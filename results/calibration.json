@@ -1,0 +1,15 @@
+{
+  "uncalibrated LR": {
+    "brier": 0.063,
+    "ece": 0.0278,
+    "roc_auc": 0.9182,
+    "mean_p": 0.1062
+  },
+  "isotonic-calibrated LR": {
+    "brier": 0.0621,
+    "ece": 0.0144,
+    "roc_auc": 0.9189,
+    "mean_p": 0.1128
+  },
+  "test_toxic_rate": 0.1116
+}
