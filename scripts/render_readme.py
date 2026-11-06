@@ -45,7 +45,11 @@ def blocks() -> dict[str, str]:
         out["sample_table"] = f"Fixed LLM sample, **n = {c['sample_n']}** comments.\n\n" + \
             scenario_table(m["sample"])
         if m.get("test"):
-            out["test_table"] = f"Test comments, **n = {c['test_n']}** (LLM sample included).\n\n" + \
+            out["test_table"] = (f"Test comments, **n = {c['test_n']:,}**"
+                                 + (" (full test split)" if c["test_n"] >= 5000 else
+                                    " (first rows of the fixed test permutation; a subset of the "
+                                    "5,000-comment test split that includes the LLM sample)")
+                                 + ".\n\n") + \
                 scenario_table(m["test"])
     f = load("fairness.json")
     if f:
@@ -58,10 +62,10 @@ def blocks() -> dict[str, str]:
                         f"{i['mentions_identity']['fpr']:.3f} | {i['no_identity']['fpr']:.3f} | "
                         f"{i['fpr_gap']:+.3f} | {i['fpr_ratio']:.2f}x |")
         for k, d in f["systems"].items():
-            add(k, d, f"test n={f['test_n']}")
+            add(k, d, f"full test split n={f['test_n']:,}")
         for k in ("ml_baseline", "ml_reweighted", "hybrid"):
             if f.get("hybrid_subset", {}).get(k):
-                add(k, f["hybrid_subset"][k], f"test n={f['hybrid_subset']['n']}")
+                add(k, f["hybrid_subset"][k], f"test subset n={f['hybrid_subset']['n']:,}")
         for k in ("ml", "llm", "hybrid"):
             if f.get("sample", {}).get(k):
                 add({"ml": "ml_baseline", "llm": "llm_all"}.get(k, k), f["sample"][k],

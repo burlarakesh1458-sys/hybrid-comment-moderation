@@ -186,7 +186,10 @@ def render_table(res: dict) -> str:
             "LLM comments", "LLM req", "$ / 10k", "human / 10k"]
     lines = []
     for key, title in (("sample", f"Head-to-head on the fixed LLM sample (n={res['config']['sample_n']})"),
-                       ("test", f"Full test split (n={res['config']['test_n']})")):
+                       ("test", (f"Full test split (n={res['config']['test_n']})"
+                                 if res['config']['test_n'] >= 5000 else
+                                 f"Test subset, first {res['config']['test_n']} of the 5,000 in "
+                                 "the fixed permutation"))):
         lines += [f"### {title}", "", "| " + " | ".join(cols) + " |",
                   "|" + "---|" * len(cols)]
         for r in res.get(key, []):
