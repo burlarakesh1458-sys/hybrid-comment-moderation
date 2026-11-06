@@ -1,0 +1,29 @@
+{
+  "threshold": 0.26,
+  "band_low": 0.181,
+  "band_high": 0.3897,
+  "target_share": 0.1,
+  "calib_share_in_band": 0.1002,
+  "calib_ml_metrics_inside_band": {
+    "n": 1002,
+    "tp": 166,
+    "fp": 337,
+    "fn": 111,
+    "tn": 388,
+    "precision": 0.33,
+    "recall": 0.5993,
+    "f1": 0.4256,
+    "fpr": 0.4648
+  },
+  "calib_ml_metrics_outside_band": {
+    "n": 8998,
+    "tp": 556,
+    "fp": 294,
+    "fn": 296,
+    "tn": 7852,
+    "precision": 0.6541,
+    "recall": 0.6526,
+    "f1": 0.6533,
+    "fpr": 0.0361
+  }
+}

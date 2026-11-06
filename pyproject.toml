@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hybridmod"
+version = "1.0.0"
+description = "Hybrid comment moderation: rules -> calibrated TF-IDF/LR -> LLM for the low-confidence band -> human review queue."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Rakesh Burla", email = "burlarakesh1458@gmail.com" }]
+requires-python = ">=3.11"
+dependencies = [
+  "scikit-learn==1.9.1",
+  "numpy",
+  "pandas",
+  "pyarrow",
+  "joblib",
+  "fastapi",
+  "uvicorn",
+  "httpx",
+  "pydantic>=2",
+  "PyYAML",
+]
+
+[project.optional-dependencies]
+experiments = ["matplotlib", "huggingface_hub"]
+dev = ["pytest", "ruff"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "scripts"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["B008"]

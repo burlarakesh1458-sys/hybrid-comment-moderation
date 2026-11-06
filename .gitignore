@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv*/
+data/raw/
+data/processed/
+results/review_queue.sqlite
+results/*.npy
+models/*.joblib
+!models/tfidf_lr.joblib
+.env

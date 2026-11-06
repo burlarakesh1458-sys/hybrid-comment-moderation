@@ -1,0 +1,47 @@
+# Hybrid moderation config. Every threshold here is read at runtime (env MODERATION_CONFIG overrides
+# the path). Values marked "tuned" were chosen on the 10k calibration split, never on the test split.
+
+rules:
+  enabled: true
+  lexicon_path: configs/lexicon_sha256.txt   # hashed block-list tokens (no plaintext slurs in repo)
+  lexicon_salt: "hybridmod-v1"
+  allow_no_letters: true                  # emoji / punctuation / numbers only -> allow
+  allow_short_benign_max_words: 4         # "thank you!", "great article" -> allow (if no lexicon hit)
+  spam_min_links: 3                       # 3+ links in one comment -> spam hold
+  spam_max_repeat_ratio: 0.5              # a single token >50% of a 10+ token comment -> spam hold
+
+classifier:
+  model_path: models/tfidf_lr.joblib
+  # decision threshold on the calibrated P(toxic): max F1 on calib (scripts/train.py)
+  threshold: 0.26
+  # low-confidence band sent to the LLM: [band_low, band_high). tuned on calib by scripts/tune_band.py
+  band_low: 0.181
+  band_high: 0.3897
+
+llm:
+  enabled: true
+  provider: groq                           # groq | gemini (both OpenAI-compatible endpoints)
+  model: openai/gpt-oss-120b
+  base_url: https://api.groq.com/openai/v1
+  api_key_env: GROQ_API_KEY
+  batch_size: 16                           # comments per request (amortises the system prompt)
+  max_retries: 3                           # schema-validation / transport retries per batch
+  timeout_s: 60
+  reasoning_effort: low
+  cache_path: results/llm_cache.jsonl
+  # Published Groq on-demand price for openai/gpt-oss-120b (USD per 1M tokens), read 2026-11-06:
+  # https://console.groq.com/docs/model/openai/gpt-oss-120b  (cached input $0.075 not used)
+  price_input_per_m: 0.15
+  price_output_per_m: 0.60
+
+human_review:
+  queue_path: results/review_queue.sqlite
+  # any comment whose final decision is "hide" AND whose category could justify an account penalty
+  # (strike / suspension) is queued for a human; the comment stays hidden meanwhile.
+  penalty_categories: [threat, identity_attack]
+  penalty_min_p_toxic: 0.90                # very-high-confidence ML hides are also penalty-eligible
+  queue_rule_blocks: true                  # lexicon blocks are penalty-eligible
+  queue_llm_failures: true                 # band comments the LLM could not judge -> human
+
+experiment:
+  llm_sample_size: 500                     # head-to-head sample for the LLM-for-everything scenario

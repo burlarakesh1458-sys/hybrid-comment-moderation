@@ -1,0 +1,33 @@
+{
+  "dataset": "pietrolesci/civilcomments-wilds",
+  "revision": "c227534cc0a34cf21db6a0bf0edd0f9050c8b305",
+  "url": "https://huggingface.co/datasets/pietrolesci/civilcomments-wilds/tree/c227534cc0a34cf21db6a0bf0edd0f9050c8b305",
+  "upstream": [
+    "WILDS CivilComments (Koh et al., 2021) https://wilds.stanford.edu/datasets/#civilcomments",
+    "Jigsaw Unintended Bias in Toxicity Classification / Civil Comments (Borkan et al., 2019)"
+  ],
+  "license": "CC0 1.0 (Civil Comments corpus as released by Jigsaw/Google; see https://huggingface.co/datasets/google/civil_comments). The mirror repo itself declares no license; its processing_script.py binarises labels at >= 0.5 and removes duplicates.",
+  "label_definition": "toxicity and subtype columns are the fraction of crowd raters who said so, binarised at >= 0.5 by the WILDS processing.",
+  "files_sha256": {
+    "train": "f1a386f4597a4da6bcf135d65f462d17ec8387b8c322a33e72edab080d0fd9a6",
+    "test": "2e6b1bae7952d05e8edb2aaa33f439685e5be6ae1fdf3faaa3348f896cf581cb"
+  },
+  "seed": 42,
+  "splits": {
+    "train": {
+      "rows": 80000,
+      "toxic_rate": 0.1122,
+      "identity_any_rate": 0.4205
+    },
+    "calib": {
+      "rows": 10000,
+      "toxic_rate": 0.1129,
+      "identity_any_rate": 0.419
+    },
+    "test": {
+      "rows": 5000,
+      "toxic_rate": 0.1116,
+      "identity_any_rate": 0.4158
+    }
+  }
+}

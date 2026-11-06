@@ -1,0 +1,148 @@
+{
+  "test_n": 5000,
+  "identity_share": 0.4158,
+  "toxic_rate_identity": 0.1664,
+  "toxic_rate_no_identity": 0.0726,
+  "systems": {
+    "ml_baseline": {
+      "threshold": 0.26,
+      "overall": {
+        "n": 5000,
+        "tp": 382,
+        "fp": 327,
+        "fn": 176,
+        "tn": 4115,
+        "precision": 0.5388,
+        "recall": 0.6846,
+        "f1": 0.603,
+        "fpr": 0.0736
+      },
+      "identity": {
+        "mentions_identity": {
+          "n": 2079,
+          "negatives": 1733,
+          "fp": 231,
+          "fpr": 0.1333,
+          "fnr": 0.2717
+        },
+        "no_identity": {
+          "n": 2921,
+          "negatives": 2709,
+          "fp": 96,
+          "fpr": 0.0354,
+          "fnr": 0.3868
+        },
+        "fpr_gap": 0.0979,
+        "fpr_ratio": 3.77
+      },
+      "per_group": {
+        "male": {
+          "negatives": 463,
+          "fpr": 0.1231
+        },
+        "female": {
+          "negatives": 530,
+          "fpr": 0.1094
+        },
+        "LGBTQ": {
+          "negatives": 126,
+          "fpr": 0.2222
+        },
+        "christian": {
+          "negatives": 467,
+          "fpr": 0.06
+        },
+        "muslim": {
+          "negatives": 199,
+          "fpr": 0.206
+        },
+        "other_religions": {
+          "negatives": 99,
+          "fpr": 0.0909
+        },
+        "black": {
+          "negatives": 114,
+          "fpr": 0.5088
+        },
+        "white": {
+          "negatives": 216,
+          "fpr": 0.375
+        },
+        "no_identity": {
+          "negatives": 2709,
+          "fpr": 0.0354
+        }
+      }
+    },
+    "ml_reweighted": {
+      "threshold": 0.29,
+      "overall": {
+        "n": 5000,
+        "tp": 345,
+        "fp": 262,
+        "fn": 213,
+        "tn": 4180,
+        "precision": 0.5684,
+        "recall": 0.6183,
+        "f1": 0.5923,
+        "fpr": 0.059
+      },
+      "identity": {
+        "mentions_identity": {
+          "n": 2079,
+          "negatives": 1733,
+          "fp": 168,
+          "fpr": 0.0969,
+          "fnr": 0.3815
+        },
+        "no_identity": {
+          "n": 2921,
+          "negatives": 2709,
+          "fp": 94,
+          "fpr": 0.0347,
+          "fnr": 0.3821
+        },
+        "fpr_gap": 0.0622,
+        "fpr_ratio": 2.79
+      },
+      "per_group": {
+        "male": {
+          "negatives": 463,
+          "fpr": 0.0842
+        },
+        "female": {
+          "negatives": 530,
+          "fpr": 0.0717
+        },
+        "LGBTQ": {
+          "negatives": 126,
+          "fpr": 0.1429
+        },
+        "christian": {
+          "negatives": 467,
+          "fpr": 0.0471
+        },
+        "muslim": {
+          "negatives": 199,
+          "fpr": 0.1457
+        },
+        "other_religions": {
+          "negatives": 99,
+          "fpr": 0.0505
+        },
+        "black": {
+          "negatives": 114,
+          "fpr": 0.3772
+        },
+        "white": {
+          "negatives": 216,
+          "fpr": 0.2731
+        },
+        "no_identity": {
+          "negatives": 2709,
+          "fpr": 0.0347
+        }
+      }
+    }
+  }
+}
