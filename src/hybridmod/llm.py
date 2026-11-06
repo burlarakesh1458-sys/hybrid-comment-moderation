@@ -132,6 +132,7 @@ class LLMStats:
     rate_limited: int = 0
     failures: int = 0
     cache_hits: int = 0
+    splits: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
     call_latencies_ms: list[float] = field(default_factory=list)
@@ -161,6 +162,10 @@ class RateLimited(Exception):
         self.wait_s = wait_s
 
 
+class RequestTooLarge(Exception):
+    """HTTP 413: the batch exceeds the provider's per-request token budget -> split it."""
+
+
 class OpenAICompatTransport:
     """POST /chat/completions on any OpenAI-compatible endpoint (Groq, Gemini)."""
 
@@ -182,6 +187,8 @@ class OpenAICompatTransport:
         if self.cfg.reasoning_effort:
             body["reasoning_effort"] = self.cfg.reasoning_effort
         r = self.client.post("/chat/completions", json=body)
+        if r.status_code == 413:
+            raise RequestTooLarge(r.text[:300])
         if r.status_code == 429:
             raise RateLimited(float(r.headers.get("retry-after", "10")), r.text[:300])
         r.raise_for_status()
@@ -238,6 +245,17 @@ class LLMReviewer:
                 self._sleep(e.wait_s + 0.5)
 
     def _review_batch(self, items: list[tuple[int, str]]) -> dict[int, ReviewResult]:
+        try:
+            return self._review_batch_once(items)
+        except RequestTooLarge:
+            self.stats.splits += 1
+            if len(items) == 1:  # a single comment too large: give up on it -> human review
+                self.stats.failures += 1
+                return {items[0][0]: ReviewResult(None, 0.0, 0.0, 0.0, False, 1)}
+            mid = len(items) // 2
+            return self._review_batch(items[:mid]) | self._review_batch(items[mid:])
+
+    def _review_batch_once(self, items: list[tuple[int, str]]) -> dict[int, ReviewResult]:
         pending = dict(items)
         results: dict[int, ReviewResult] = {}
         feedback: list[str] = []

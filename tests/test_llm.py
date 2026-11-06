@@ -8,6 +8,7 @@ from hybridmod.llm import (
     CommentVerdict,
     LLMReviewer,
     RateLimited,
+    RequestTooLarge,
     build_user_prompt,
     parse_batch,
 )
@@ -108,3 +109,21 @@ def test_transport_error_is_retried(cfg):
     tr = FakeTransport(script=[httpx.ConnectError("boom"), verdicts_from_keywords])
     rev = LLMReviewer(cfg.llm, transport=tr, cache_path=None)
     assert rev.review(["hello"])[0].verdict is not None
+
+
+def test_too_large_batch_is_split(cfg):
+    def respond(items):
+        if len(items) > 2:
+            raise RequestTooLarge("413")
+        return verdicts_from_keywords(items)
+
+    class SplitTransport(FakeTransport):
+        def __call__(self, messages):
+            self.calls.append(messages)
+            return respond(self.items(messages)), {"prompt_tokens": 10, "completion_tokens": 5}
+
+    tr = SplitTransport()
+    rev = LLMReviewer(cfg.llm, transport=tr, cache_path=None)
+    res = rev.review(["a", "b", "kill", "d"])  # batch_size 4 -> 413 -> 2 + 2
+    assert all(r.verdict is not None for r in res) and rev.stats.splits == 1
+    assert res[2].verdict.category.value == "threat"
