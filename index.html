@@ -1,0 +1,768 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hybrid Comment Moderation · Rules + ML + LLM · Rakesh Burla</title>
+<meta name="description" content="Hybrid Comment Moderation · Rules + ML + LLM — AI engineering portfolio project by Rakesh Burla">
+<style>
+:root{--bg:#0b0f17;--card:#121826;--fg:#e6e9ef;--mut:#9aa4b2;--acc:#5eead4;--line:#243044}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 -apple-system,Segoe UI,Inter,Roboto,sans-serif}
+header{border-bottom:1px solid var(--line);background:linear-gradient(180deg,#0f1625,#0b0f17)}
+.wrap{max-width:960px;margin:0 auto;padding:0 20px}
+.top{display:flex;gap:12px;align-items:center;justify-content:space-between;padding:22px 0;flex-wrap:wrap}
+.brand{font-weight:700;font-size:1.15rem}.brand small{display:block;color:var(--mut);font-weight:400;font-size:.85rem}
+.btn{display:inline-block;padding:9px 16px;border:1px solid var(--acc);color:var(--acc);border-radius:8px;text-decoration:none;font-weight:600}
+.btn:hover{background:var(--acc);color:#04201b}
+main{padding:28px 0 60px}h1,h2,h3{line-height:1.25}h1{font-size:2rem}h2{margin-top:2.2em;padding-bottom:.3em;border-bottom:1px solid var(--line)}
+a{color:var(--acc)}code{background:#1b2333;padding:.1em .35em;border-radius:5px;font-size:.92em}
+pre{background:var(--card);border:1px solid var(--line);padding:14px;border-radius:10px;overflow:auto}pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;display:block;overflow-x:auto;margin:1em 0}th,td{border:1px solid var(--line);padding:7px 10px;text-align:left}th{background:var(--card)}
+img{max-width:100%;border-radius:10px;background:#fff}blockquote{border-left:3px solid var(--acc);margin:0;padding:.2em 1em;color:var(--mut)}
+pre.mermaid{background:#fff;color:#000}
+footer{border-top:1px solid var(--line);color:var(--mut);padding:20px 0;font-size:.9rem}
+</style></head><body>
+<header><div class="wrap top"><div class="brand">Hybrid Comment Moderation · Rules + ML + LLM<small>AI engineering portfolio · Rakesh Burla</small></div>
+<div><a class="btn" href="https://github.com/burlarakesh1458-sys/hybrid-comment-moderation">View code on GitHub</a></div></div></header>
+<main class="wrap"><h1 id="hybrid-ai-comment-moderation">Hybrid AI Comment Moderation</h1>
+<p>Moderating ~10,000 comments a day for a creator platform without
+sending every comment to an LLM. Cheap, deterministic stages handle the
+clear-cut cases; a calibrated classifier handles the bulk; an LLM sees
+only the comments the classifier is unsure about; and anything that
+could lead to an account penalty goes to a person.</p>
+<p>Built and measured on real, human-labelled public data (Civil
+Comments, via the WILDS release). Every number in this README was
+produced by the scripts in this repo; the raw outputs are in
+<code>results/</code>.</p>
+<h2 id="architecture">Architecture</h2>
+<pre class="mermaid">flowchart LR
+    C[comment] --&gt; R{Stage 1&lt;br/&gt;rules}
+    R -- &quot;emoji-only / short thanks&quot; --&gt; A[allow]
+    R -- &quot;3+ links, promo, repetition&quot; --&gt; S[spam hold]
+    R -- &quot;hashed lexicon hit&quot; --&gt; H[hide] --&gt; Q
+    R -- pass --&gt; M[Stage 2&lt;br/&gt;TF-IDF + LR&lt;br/&gt;calibrated P(toxic)]
+    M -- &quot;p &lt; band_low&quot; --&gt; A
+    M -- &quot;p &gt;= band_high&quot; --&gt; H2[hide]
+    M -- &quot;band_low &lt;= p &lt; band_high&quot; --&gt; L[Stage 3&lt;br/&gt;LLM review&lt;br/&gt;JSON + Pydantic + retry]
+    L -- &quot;allowed category&quot; --&gt; A
+    L -- &quot;violating category&quot; --&gt; H3[hide]
+    L -- &quot;invalid after retries&quot; --&gt; F[ML threshold] --&gt; Q
+    H2 -- &quot;p &gt;= 0.90&quot; --&gt; Q
+    H3 -- &quot;threat / identity_attack&quot; --&gt; Q[(Stage 4&lt;br/&gt;human review queue&lt;br/&gt;SQLite)]
+    Q --&gt; P[human: allow / hide / penalize]</pre>
+<pre><code>             +---------+   pass   +-------------------+  low-confidence band  +---------------+
+comment ---&gt; | rules   | -------&gt; | TF-IDF + LogReg   | --------------------&gt; | LLM reviewer  |
+             | (µs)    |          | calibrated (ms)   |                       | JSON schema,  |
+             +---------+          +-------------------+                       | retry, cache  |
+              |  |   |               |            |                         +---------------+
+        allow  spam  block       allow (p&lt;lo)  hide (p&gt;=hi)                     |          |
+                     |                              |                        allow      hide
+                     v                              v                                    |
+             +-------------------------------------------------------------------------+
+             | human review queue (SQLite): anything that could justify an account      |
+             | penalty - lexicon blocks, p&gt;=0.90 hides, threat / identity_attack, LLM    |
+             | failures. Automated stages only hide/allow a comment; people penalize.    |
+             +-------------------------------------------------------------------------+</code></pre>
+<table>
+<thead>
+<tr class="header">
+<th>Stage</th>
+<th>What it does</th>
+<th>Why this method</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>1. Rules (<code>rules.py</code>)</td>
+<td>allow emoji/punctuation-only and short appreciation ("thank you!");
+hold spam (3+ links, promo phrases, one token &gt; 50% of a long
+comment); block tokens in a learned lexicon</td>
+<td>Clear-cut cases need no model. The lexicon is <strong>salted SHA-256
+hashes</strong> of normalised tokens (leetspeak folded, repeats
+collapsed), so the repo contains no plaintext slur list. It was learned
+from the training split (tokens with support &gt;= 20 and training
+toxic-rate &gt;= 0.85) plus a short curated list kept outside the
+repo.</td>
+</tr>
+<tr class="even">
+<td>2. Classifier (<code>classifier.py</code>)</td>
+<td>word 1-2-gram TF-IDF + hashed char 3-5-gram TF-IDF -&gt; logistic
+regression, isotonic calibration (<code>CalibratedClassifierCV</code>,
+cv=3 on train)</td>
+<td>Cheap, fast on CPU, and calibrated probabilities make the confidence
+band meaningful. Hashed char n-grams keep memory flat (the sandbox had 7
+GB shared by three builds).</td>
+</tr>
+<tr class="odd">
+<td>3. LLM review (<code>llm.py</code>)</td>
+<td>only comments with <code>band_low &lt;= p &lt; band_high</code>;
+batched; returns JSON validated by Pydantic: <code>category</code> in
+{toxicity, threat, insult, identity_attack, sarcasm_critique_ok,
+question, appreciation, neutral_ok}, <code>violates</code> (must agree
+with the category), <code>confidence</code>, <code>reason</code></td>
+<td>Context and intent (sarcasm, critique of a public figure, quoting)
+are where n-grams fail. Invalid items are re-asked with the validation
+error fed back; items still invalid after 3 retries fall back to the ML
+decision <strong>and</strong> go to a human. 429s honour
+<code>retry-after</code> without spending retries. Responses are cached
+on disk (JSONL) so runs are resumable and never pay twice.</td>
+</tr>
+<tr class="even">
+<td>4. Human queue (<code>review_queue.py</code>)</td>
+<td>SQLite queue + API to resolve items as allow / hide / penalize</td>
+<td>The automated system only hides or allows a comment (reversible).
+Account consequences are a human decision.</td>
+</tr>
+</tbody>
+</table>
+<p>All thresholds live in <a
+href="https://github.com/burlarakesh1458-sys/hybrid-comment-moderation/blob/main/configs/moderation.yaml"><code>configs/moderation.yaml</code></a>
+and are chosen on the calibration split, never on the test split.</p>
+<h2 id="data-and-provenance">Data and provenance</h2>
+<table>
+<tbody>
+<tr class="odd">
+<td>Source</td>
+<td><a
+href="https://huggingface.co/datasets/pietrolesci/civilcomments-wilds"><code>pietrolesci/civilcomments-wilds</code></a>
+pinned at revision <code>c227534c</code>, a Hugging Face mirror of the
+<a href="https://wilds.stanford.edu/datasets/#civilcomments">WILDS
+CivilComments</a> release (Koh et al., 2021) of the Jigsaw
+<em>Unintended Bias in Toxicity Classification</em> / Civil Comments
+corpus (Borkan et al., 2019)</td>
+</tr>
+<tr class="even">
+<td>License</td>
+<td>Civil Comments is released under <strong>CC0 1.0</strong> (see the
+<a
+href="https://huggingface.co/datasets/google/civil_comments"><code>google/civil_comments</code></a>
+card). The mirror repo itself declares no license; its
+<code>processing_script.py</code> only binarises labels at &gt;= 0.5 and
+de-duplicates.</td>
+</tr>
+<tr class="odd">
+<td>Labels</td>
+<td><code>toxicity</code> = 1 when &gt;= 50% of crowd raters marked the
+comment toxic. Subtype columns (threat, insult, identity_attack, ...)
+and <strong>identity-mention columns</strong> (male, female, LGBTQ,
+christian, muslim, other_religions, black, white) are the human
+annotations, binarised the same way.</td>
+</tr>
+<tr class="even">
+<td>Why this mirror</td>
+<td>It is the only public, ungated copy that has both the subtype labels
+<strong>and</strong> the identity annotations in one table, which the
+fairness analysis needs.</td>
+</tr>
+<tr class="odd">
+<td>Splits (seed 42)</td>
+<td>train 80,000 and calibration 10,000 sampled from the WILDS train
+split; test 5,000 sampled from the WILDS test split with exact-text
+duplicates of train/calib removed. Toxic rate 11.2% / 11.3% / 11.2%;
+identity mentioned in 42.1% / 41.9% / 41.6%.</td>
+</tr>
+<tr class="even">
+<td>LLM sample</td>
+<td>the first N comments of a seeded permutation of the test split
+(<code>data/splits/llm_order_uids.txt</code>)</td>
+</tr>
+<tr class="odd">
+<td>Reproduce</td>
+<td><code>make data</code> downloads the pinned parquet files, checks
+nothing by hand, and rewrites <code>data/PROVENANCE.json</code> (file
+SHA-256s, split stats). Only the row uids are committed.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="quick-start">Quick start</h2>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">python</span> <span class="at">-m</span> venv .venv <span class="kw">&amp;&amp;</span> <span class="bu">.</span> .venv/bin/activate</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="ex">pip</span> install <span class="at">-r</span> requirements-dev.txt</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="bu">export</span> <span class="va">PYTHONPATH</span><span class="op">=</span>src:scripts</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span> test                      <span class="co"># 48 offline tests, no API key needed</span></span>
+<span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span> serve                     <span class="co"># FastAPI on :8000 using the committed model</span></span>
+<span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a><span class="ex">curl</span> <span class="at">-s</span> localhost:8000/v1/moderate <span class="at">-H</span> <span class="st">&#39;content-type: application/json&#39;</span> <span class="dt">\</span></span>
+<span id="cb3-8"><a href="#cb3-8" aria-hidden="true" tabindex="-1"></a>     <span class="at">-d</span> <span class="st">&#39;{&quot;text&quot;: &quot;Thanks for the great video!&quot;, &quot;comment_id&quot;: &quot;c1&quot;}&#39;</span></span>
+<span id="cb3-9"><a href="#cb3-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-10"><a href="#cb3-10" aria-hidden="true" tabindex="-1"></a><span class="co"># full experiment pipeline (needs GROQ_API_KEY for the LLM stage)</span></span>
+<span id="cb3-11"><a href="#cb3-11" aria-hidden="true" tabindex="-1"></a><span class="fu">make</span> data lexicon train tune llm-sample evaluate sweep fairness errors</span></code></pre></div>
+<p>Docker:
+<code>docker build -t hybridmod . &amp;&amp; docker run -p 8000:8000 -e GROQ_API_KEY hybridmod</code>.
+Without <code>GROQ_API_KEY</code> the service still runs: band comments
+keep the ML decision and are queued for human review
+(<code>review_reason = llm_unavailable</code>).</p>
+<h3 id="api">API</h3>
+<table>
+<thead>
+<tr class="header">
+<th>Method</th>
+<th>Path</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>POST</td>
+<td><code>/v1/moderate</code></td>
+<td>one comment <code>{text, comment_id?}</code> -&gt; decision (action,
+stage, p_toxic, category, human_review, latency_ms)</td>
+</tr>
+<tr class="even">
+<td>POST</td>
+<td><code>/v1/moderate/batch</code></td>
+<td>up to 500 comments; ML runs vectorised, band comments share LLM
+requests; returns results + summary</td>
+</tr>
+<tr class="odd">
+<td>GET</td>
+<td><code>/v1/review-queue?status=pending</code></td>
+<td>items waiting for a person, plus queue stats</td>
+</tr>
+<tr class="even">
+<td>POST</td>
+<td><code>/v1/review-queue/{id}/resolve</code></td>
+<td><code>{human_action: allow / hide / penalize, reviewer, note}</code></td>
+</tr>
+<tr class="odd">
+<td>GET</td>
+<td><code>/v1/config</code></td>
+<td>live thresholds (no secrets)</td>
+</tr>
+<tr class="even">
+<td>GET</td>
+<td><code>/healthz</code></td>
+<td>liveness + whether the LLM stage is active</td>
+</tr>
+</tbody>
+</table>
+<h2 id="results">Results</h2>
+<p>All numbers below come from <code>scripts/evaluate.py</code> (tables
+are generated into this README by <code>scripts/render_readme.py</code>
+from <code>results/metrics.json</code>). The threshold
+(<code>0.26</code>) and the LLM band (<code>[0.181, 0.390)</code>, the
+10% of calibration comments closest to the threshold) were fixed on the
+calibration split before any test or LLM result was looked at.</p>
+<ul>
+<li><strong>Positive class</strong> = toxic (crowd label). A hidden
+comment counts as a positive prediction; <code>spam_hold</code> does
+not.</li>
+<li><strong>Latency</strong> is per comment on a shared 2-vCPU sandbox:
+rules + one single-comment <code>predict_proba</code> call, plus, for
+comments routed to the LLM, the wall time of the batched Groq request
+that judged it. LLM requests carry 8 comments (split in halves on HTTP
+413).</li>
+<li><strong>Cost</strong> = measured prompt/completion tokens x Groq's
+published on-demand price for <code>openai/gpt-oss-safeguard-20b</code>
+($0.075 / 1M input, $0.30 / 1M output, <a
+href="https://console.groq.com/docs/model/openai/gpt-oss-safeguard-20b">model
+page</a>, read 2026-11-06), projected to 10,000 comments. The
+experiments themselves ran on Groq's free tier. The cached-input
+discount is ignored, so the cost is an upper bound.</li>
+<li><strong>95% CI</strong> = percentile bootstrap over comments (1,000
+resamples).</li>
+</ul>
+<h3
+id="head-to-head-all-three-scenarios-on-the-same-comments">Head-to-head:
+all three scenarios on the same comments</h3>
+<!-- GEN:sample_table -->
+
+<p>Fixed LLM sample, <strong>n = 500</strong> comments.</p>
+<table>
+<thead>
+<tr class="header">
+<th>scenario</th>
+<th>F1 [95% CI]</th>
+<th>precision</th>
+<th>recall</th>
+<th>false pos.</th>
+<th>false neg.</th>
+<th>latency p50 / p95 (ms)</th>
+<th>LLM comments</th>
+<th>LLM requests</th>
+<th>est. $ per 10k</th>
+<th>human reviews per 10k</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>(a) ML only</td>
+<td><strong>0.624</strong> [0.51, 0.72]</td>
+<td>0.542</td>
+<td>0.736</td>
+<td>33</td>
+<td>14</td>
+<td>3.3 / 4.3</td>
+<td>0</td>
+<td>0</td>
+<td>$0.000</td>
+<td>60</td>
+</tr>
+<tr class="even">
+<td>rules + ML (ablation)</td>
+<td><strong>0.635</strong> [0.53, 0.73]</td>
+<td>0.548</td>
+<td>0.755</td>
+<td>33</td>
+<td>13</td>
+<td>3.6 / 5.3</td>
+<td>0</td>
+<td>0</td>
+<td>$0.000</td>
+<td>160</td>
+</tr>
+<tr class="odd">
+<td>(b) LLM for everything</td>
+<td><strong>0.429</strong> [0.32, 0.52]</td>
+<td>0.333</td>
+<td>0.604</td>
+<td>64</td>
+<td>21</td>
+<td>936 / 1,410</td>
+<td>500</td>
+<td>63</td>
+<td>$0.374</td>
+<td>980</td>
+</tr>
+<tr class="even">
+<td>(c) hybrid</td>
+<td><strong>0.622</strong> [0.51, 0.72]</td>
+<td>0.561</td>
+<td>0.698</td>
+<td>29</td>
+<td>16</td>
+<td>3.7 / 941</td>
+<td>46</td>
+<td>6</td>
+<td>$0.035</td>
+<td>320</td>
+</tr>
+</tbody>
+</table>
+<!-- /GEN:sample_table -->
+
+<h3
+id="larger-test-subset-3000-of-the-5000-test-comments-no-llm-for-everything-rate-limits">Larger
+test subset: 3,000 of the 5,000 test comments (no LLM-for-everything:
+rate limits)</h3>
+<!-- GEN:test_table -->
+
+<p>Test comments, <strong>n = 3,000</strong> (first rows of the fixed
+test permutation; a subset of the 5,000-comment test split that includes
+the LLM sample).</p>
+<table>
+<thead>
+<tr class="header">
+<th>scenario</th>
+<th>F1 [95% CI]</th>
+<th>precision</th>
+<th>recall</th>
+<th>false pos.</th>
+<th>false neg.</th>
+<th>latency p50 / p95 (ms)</th>
+<th>LLM comments</th>
+<th>LLM requests</th>
+<th>est. $ per 10k</th>
+<th>human reviews per 10k</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>(a) ML only</td>
+<td><strong>0.617</strong> [0.57, 0.66]</td>
+<td>0.557</td>
+<td>0.692</td>
+<td>188</td>
+<td>105</td>
+<td>3.4 / 4.4</td>
+<td>0</td>
+<td>0</td>
+<td>$0.000</td>
+<td>100</td>
+</tr>
+<tr class="even">
+<td>rules + ML (ablation)</td>
+<td><strong>0.621</strong> [0.58, 0.66]</td>
+<td>0.559</td>
+<td>0.698</td>
+<td>188</td>
+<td>103</td>
+<td>3.5 / 5.1</td>
+<td>0</td>
+<td>0</td>
+<td>$0.000</td>
+<td>153</td>
+</tr>
+<tr class="odd">
+<td>(c) hybrid</td>
+<td><strong>0.633</strong> [0.59, 0.67]</td>
+<td>0.600</td>
+<td>0.672</td>
+<td>153</td>
+<td>112</td>
+<td>3.8 / 1,075</td>
+<td>275</td>
+<td>35</td>
+<td>$0.036</td>
+<td>333</td>
+</tr>
+</tbody>
+</table>
+<!-- /GEN:test_table -->
+
+<h3 id="llm-budget-vs-f1-threshold-sweep-of-the-confidence-band">LLM
+budget vs F1 (threshold sweep of the confidence band)</h3>
+<p><img src="results/charts/band_sweep.png" alt="band sweep" /></p>
+<p>Every comment of the LLM sample has a cached verdict, so any band can
+be simulated exactly. Left: band widths defined on the calibration split
+by the share of comments they route. Right: every (low, high) pair on a
+0.05 grid with its Pareto front. This is analysis on test data; it was
+not used to pick the band.</p>
+<!-- GEN:sweep_table -->
+
+<table>
+<thead>
+<tr class="header">
+<th>calib share routed</th>
+<th>band [low, high)</th>
+<th>share routed on sample</th>
+<th>F1</th>
+<th>FP</th>
+<th>FN</th>
+<th>est. $ per 10k</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>0%</td>
+<td>[0.260, 0.260)</td>
+<td>0.0%</td>
+<td>0.635</td>
+<td>33</td>
+<td>13</td>
+<td>$0.000</td>
+</tr>
+<tr class="even">
+<td>2%</td>
+<td>[0.240, 0.281)</td>
+<td>1.2%</td>
+<td>0.625</td>
+<td>35</td>
+<td>13</td>
+<td>$0.004</td>
+</tr>
+<tr class="odd">
+<td>5%</td>
+<td>[0.218, 0.318)</td>
+<td>4.0%</td>
+<td>0.640</td>
+<td>32</td>
+<td>13</td>
+<td>$0.016</td>
+</tr>
+<tr class="even">
+<td>8%</td>
+<td>[0.198, 0.353)</td>
+<td>6.6%</td>
+<td>0.645</td>
+<td>29</td>
+<td>14</td>
+<td>$0.025</td>
+</tr>
+<tr class="odd">
+<td>10%</td>
+<td>[0.181, 0.390)</td>
+<td>9.2%</td>
+<td>0.622</td>
+<td>29</td>
+<td>16</td>
+<td>$0.035</td>
+</tr>
+<tr class="even">
+<td>15%</td>
+<td>[0.152, 0.486)</td>
+<td>14.8%</td>
+<td>0.598</td>
+<td>29</td>
+<td>18</td>
+<td>$0.056</td>
+</tr>
+<tr class="odd">
+<td>20%</td>
+<td>[0.134, 0.628)</td>
+<td>20.0%</td>
+<td>0.561</td>
+<td>29</td>
+<td>21</td>
+<td>$0.075</td>
+</tr>
+<tr class="even">
+<td>30%</td>
+<td>[0.101, 1.000)</td>
+<td>26.6%</td>
+<td>0.530</td>
+<td>33</td>
+<td>22</td>
+<td>$0.101</td>
+</tr>
+<tr class="odd">
+<td>40%</td>
+<td>[0.077, 1.000)</td>
+<td>30.4%</td>
+<td>0.520</td>
+<td>38</td>
+<td>21</td>
+<td>$0.117</td>
+</tr>
+<tr class="even">
+<td>60%</td>
+<td>[0.043, 1.000)</td>
+<td>37.8%</td>
+<td>0.496</td>
+<td>47</td>
+<td>20</td>
+<td>$0.143</td>
+</tr>
+<tr class="odd">
+<td>80%</td>
+<td>[0.026, 1.000)</td>
+<td>50.8%</td>
+<td>0.471</td>
+<td>54</td>
+<td>20</td>
+<td>$0.192</td>
+</tr>
+<tr class="even">
+<td>100%</td>
+<td>[0.000, 1.010)</td>
+<td>98.6%</td>
+<td>0.440</td>
+<td>64</td>
+<td>20</td>
+<td>$0.368</td>
+</tr>
+</tbody>
+</table>
+<!-- /GEN:sweep_table -->
+
+<h3 id="calibration">Calibration</h3>
+<p><img src="results/charts/calibration.png" alt="calibration" /></p>
+<h3
+id="fairness-false-positives-on-comments-that-mention-identity-groups">Fairness:
+false positives on comments that mention identity groups</h3>
+<p>Identity mentions come from the Civil Comments human annotations, not
+from keyword matching. FPR = share of non-toxic comments that were
+hidden.</p>
+<p><img src="results/charts/fpr_by_identity.png"
+alt="fpr by identity" /></p>
+<!-- GEN:fairness_table -->
+
+<table>
+<thead>
+<tr class="header">
+<th>system</th>
+<th>eval set</th>
+<th>F1</th>
+<th>FPR, identity mentioned</th>
+<th>FPR, no identity</th>
+<th>gap</th>
+<th>ratio</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>ml_baseline</td>
+<td>full test split n=5,000</td>
+<td>0.603</td>
+<td>0.133</td>
+<td>0.035</td>
+<td>+0.098</td>
+<td>3.77x</td>
+</tr>
+<tr class="even">
+<td>ml_reweighted</td>
+<td>full test split n=5,000</td>
+<td>0.592</td>
+<td>0.097</td>
+<td>0.035</td>
+<td>+0.062</td>
+<td>2.79x</td>
+</tr>
+<tr class="odd">
+<td>ml_baseline</td>
+<td>test subset n=3,000</td>
+<td>0.617</td>
+<td>0.134</td>
+<td>0.031</td>
+<td>+0.103</td>
+<td>4.29x</td>
+</tr>
+<tr class="even">
+<td>ml_reweighted</td>
+<td>test subset n=3,000</td>
+<td>0.605</td>
+<td>0.098</td>
+<td>0.032</td>
+<td>+0.066</td>
+<td>3.07x</td>
+</tr>
+<tr class="odd">
+<td>hybrid</td>
+<td>test subset n=3,000</td>
+<td>0.633</td>
+<td>0.105</td>
+<td>0.028</td>
+<td>+0.078</td>
+<td>3.84x</td>
+</tr>
+<tr class="even">
+<td>ml_baseline</td>
+<td>sample n=500</td>
+<td>0.624</td>
+<td>0.107</td>
+<td>0.052</td>
+<td>+0.055</td>
+<td>2.07x</td>
+</tr>
+<tr class="odd">
+<td>llm_all</td>
+<td>sample n=500</td>
+<td>0.429</td>
+<td>0.215</td>
+<td>0.096</td>
+<td>+0.118</td>
+<td>2.23x</td>
+</tr>
+<tr class="even">
+<td>hybrid</td>
+<td>sample n=500</td>
+<td>0.622</td>
+<td>0.090</td>
+<td>0.048</td>
+<td>+0.042</td>
+<td>1.88x</td>
+</tr>
+</tbody>
+</table>
+<!-- /GEN:fairness_table -->
+
+<h2 id="engineering-judgment-what-the-numbers-say">Engineering judgment:
+what the numbers say</h2>
+<p><strong>1. "Send everything to an LLM" lost on every axis we
+measured.</strong> On the 500-comment head-to-head the
+LLM-for-everything scenario had the lowest F1 (0.429 vs 0.624 for ML
+alone), almost twice the false positives (64 vs 33), ~280x the median
+latency, and the highest projected API bill. The cause is not one weak
+model: on the 176 comments both models judged, <code>gpt-oss-120b</code>
+and <code>gpt-oss-safeguard-20b</code> agreed on 82% of decisions and
+both had precision around 0.31-0.34 against the crowd labels
+(<code>results/llm_model_comparison.json</code>). A written policy that
+flags "rude or disrespectful" comments is stricter than the Civil
+Comments crowd threshold (&gt;= 50% of raters), so a zero-shot LLM
+over-flags relative to this ground truth. The classifier, trained on the
+labels, has learned the crowd's threshold.</p>
+<p><strong>2. The LLM is worth its cost only in a narrow band.</strong>
+On the 500-comment sample the budget curve peaks when 4-7% of comments
+are routed (F1 0.640-0.645 vs 0.635 for rules + ML with no LLM) and
+falls steadily beyond that: the wider the band, the more comments the
+over-strict LLM gets to overrule a classifier that was right. The band
+chosen on the calibration split (10% of calib comments, 9.2% of the
+sample) lands just past that peak. On the sample the hybrid cut false
+positives from 33 to 29 (precision 0.548 -&gt; 0.561 vs rules + ML) but
+added three false negatives, so its F1 (0.622) is statistically
+indistinguishable from ML alone (0.624); the 95% bootstrap intervals
+overlap almost completely. On the larger 3,000-comment test subset the
+same fixed band routed 275 comments (9.2%) and the hybrid did come out
+ahead: F1 0.633 vs 0.617 (ML only) and 0.621 (rules + ML), false
+positives 188 -&gt; 153 (precision 0.559 -&gt; 0.600 vs rules + ML) for
+9 more false negatives, at ~$0.036 per 10k comments. The intervals still
+overlap ([0.59, 0.67] vs [0.57, 0.66]), so this is a consistent lean,
+not a proven win. The grid optimum on the right-hand chart (band [0.40,
+0.45), F1 0.656) is selected on test data from 210 candidates and should
+be read as noise until confirmed on a fresh split.</p>
+<p><strong>3. What the LLM is actually for here.</strong> Even where it
+does not move F1, the LLM stage turns an opaque probability into a
+category (threat / insult / identity_attack / sarcasm_critique_ok /
+question / appreciation) and a one-line reason. That is what routes
+penalty-eligible comments to a person and what a moderator reads in the
+queue. The cost of having it is ~$0.035 per 10k comments at the measured
+routing rate, about a tenth of LLM-for-everything.</p>
+<p><strong>4. Calibration is what makes the band a dial.</strong>
+Isotonic calibration halved the expected calibration error on test
+(0.028 -&gt; 0.014, same ROC-AUC), so "route the 10% least certain"
+means the same thing on calibration and test data, and the routed share
+on test (9.2% of the sample) matched the 10% target set on calibration;
+on the 3,000-comment subset it was 9.2% too.</p>
+<p><strong>5. Rules are cheap but small.</strong> The pre-moderated
+Civil Comments data contains few slurs, so the lexicon fires rarely (66
+of 10,000 calibration comments, precision 0.86); its job is the
+clear-cut cases at microsecond cost and an auditable reason. Lexicon
+hits are queued for a human because a keyword is not enough evidence for
+an account penalty.</p>
+<p><strong>6. Fairness: the classifier's biggest problem, and only
+partly fixed.</strong> On the full 5,000-comment test split the baseline
+hides 13.3% of non-toxic comments that mention an identity group vs 3.5%
+of those that do not (3.8x). The worst groups are the ones most often
+discussed in toxic threads: 51% of non-toxic comments mentioning Black
+people and 38% mentioning white people were hidden (small groups, 114
+and 216 non-toxic comments). Reweighing the training data so identity
+mentions are independent of the label cut the identity FPR to 9.7%
+(ratio 2.8x; Black 38%, white 27%) for a 1.1-point F1 cost (0.603 -&gt;
+0.592). That is a real improvement and still far from parity, which is
+the main reason every penalty decision stays with a human. On the
+3,000-comment subset the hybrid (no reweighing) also lowered the
+identity FPR, 13.4% -&gt; 10.6% vs the ML baseline on the same comments
+(Black 47% -&gt; 36%, white 39% -&gt; 29%; 59 and 129 non-toxic
+comments), because the LLM overturns some identity-mention false
+positives in the band.</p>
+<h2 id="limitations">Limitations</h2>
+<ul>
+<li><strong>Labels are not a platform policy.</strong> Civil Comments
+crowd labels (news-site comments, 2015-2017, pre-moderated) define
+"toxic" here. A creator platform's own policy would need its own
+labelled set; the LLM numbers above mostly measure policy mismatch, not
+model quality.</li>
+<li><strong>Small LLM samples.</strong> The head-to-head uses 500
+comments (53 toxic) because the free tier caps daily tokens; F1
+intervals are about +/-0.1 wide. The larger hybrid evaluation covers
+3,000 of the 5,000 test comments for the same reason.</li>
+<li><strong>Model switch mid-run.</strong> The LLM sample was started on
+<code>openai/gpt-oss-120b</code>; its free-tier daily token cap (shared
+with other projects on the same key) ran out after 176 comments, so all
+reported LLM results use <code>openai/gpt-oss-safeguard-20b</code> for
+every comment. The 120b verdicts are kept only for the side
+comparison.</li>
+<li><strong>No prompt tuning.</strong> The policy prompt was written
+once and never tuned (tuning on test would leak; there was no token
+budget to tune on calibration). Few-shot examples drawn from the
+training labels are the obvious next step and would likely close much of
+the precision gap.</li>
+<li><strong>Latency</strong> was measured on a shared 2-vCPU sandbox
+with two other builds running, and LLM latency includes free-tier
+queueing; production numbers would differ. Batching 8 comments per
+request means a band comment waits for its batch.</li>
+<li><strong>Cost</strong> is projected from measured tokens at list
+price; it ignores prompt caching (Groq bills cached input at half price)
+and the human-review cost, which dominates in practice.</li>
+<li><strong>Fairness</strong> uses identity annotations that exist only
+because raters supplied them; in production the system sees raw text,
+and the mitigation was tested for one attribute grouping (any identity
+vs none).</li>
+<li><strong>English only</strong>; spam rules are simple heuristics and
+were not evaluated against a spam dataset.</li>
+</ul>
+<h2 id="repository-layout">Repository layout</h2>
+<pre><code>configs/moderation.yaml        thresholds, band, LLM + human-review policy, prices (with source URLs)
+configs/lexicon_sha256.txt     hashed block lexicon (no plaintext)
+src/hybridmod/                 rules, classifier, llm, pipeline, review_queue, api, metrics, data
+scripts/                       prepare_data, build_lexicon, train, tune_band, run_llm_sample,
+                               evaluate, sweep, fairness, calibration_plot, compare_llms,
+                               error_analysis, render_readme
+models/tfidf_lr.joblib         committed serving model (11.5 MB)
+results/                       metrics, predictions (ids + labels, no text), charts, LLM cache
+docs/ERROR_ANALYSIS.md         generated error analysis with real (masked) examples
+tests/                         offline pytest suite (no network, no API key)</code></pre>
+<h2 id="license">License</h2>
+<p>Code: MIT. Data: Civil Comments, CC0 1.0; not redistributed here
+(only row ids).</p>
+</main>
+<footer><div class="wrap">© 2026 Rakesh Burla · MIT License · <a href="https://github.com/burlarakesh1458-sys/hybrid-comment-moderation">https://github.com/burlarakesh1458-sys/hybrid-comment-moderation</a></div></footer>
+<script type="module">import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";mermaid.initialize({startOnLoad:true,theme:"default"});</script>
+</body></html>
