@@ -1,5 +1,8 @@
 # Hybrid AI Comment Moderation
 
+<!-- links -->
+[![CI](https://github.com/burlarakesh1458-sys/hybrid-comment-moderation/actions/workflows/ci.yml/badge.svg)](https://github.com/burlarakesh1458-sys/hybrid-comment-moderation/actions/workflows/ci.yml) **Live demo:** <http://rakeshburla.dpdns.org/hybrid-comment-moderation/> · **Code:** <https://github.com/burlarakesh1458-sys/hybrid-comment-moderation> · **Resume bullets:** [RESUME_BULLETS.md](RESUME_BULLETS.md) · **License:** MIT
+
 Moderating ~10,000 comments a day for a creator platform without sending every comment to an LLM.
 Cheap, deterministic stages handle the clear-cut cases; a calibrated classifier handles the bulk;
 an LLM sees only the comments the classifier is unsure about; and anything that could lead to an
